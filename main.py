@@ -1,37 +1,46 @@
-from ultralytics import YOLO
-import cv2
+import json
+import importlib
+import sys
+from pathlib import Path
 
-model = YOLO("yolov8s.pt")
+try:
+    import questionary
+except ImportError:
+    print("Missing dependency: run `uv add questionary`")
+    sys.exit(1)
 
-cap = cv2.VideoCapture(0)
 
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+def load_cli(path: str = "cli.json") -> dict:
+    with open(path) as f:
+        return json.load(f)
 
-if not cap.isOpened():
-    print("Unable to open the camera")
-    exit()
 
-print("Press Q to exit")
+def main():
+    config = load_cli()
+    commands = config["commands"]
 
-while True:
-    ret, frame = cap.read()
+    choices = [
+        questionary.Choice(title=f"{cmd['label']}  —  {cmd['description']}", value=i)
+        for i, cmd in enumerate(commands)
+    ]
+    choices.append(questionary.Choice(title="Quit", value=-1))
 
-    if not ret:
-        break
+    result = questionary.select(config["title"], choices=choices).ask()
 
-    results = model(
-        frame,
-        device="mps",
-        verbose=False
-    )
+    if result is None or result == -1:
+        sys.exit(0)
 
-    annotated_frame = results[0].plot()
+    cmd = commands[result]
+    module = importlib.import_module(cmd["module"])
+    fn = getattr(module, cmd["function"])
 
-    cv2.imshow("YOLO Camera", annotated_frame)
+    if cmd["function"] == "run_image":
+        path = questionary.path("Image path:").ask()
+        if path:
+            fn(path)
+    else:
+        fn()
 
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
 
-cap.release()
-cv2.destroyAllWindows()
+if __name__ == "__main__":
+    main()

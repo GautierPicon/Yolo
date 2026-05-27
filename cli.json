@@ -1,0 +1,19 @@
+{
+  "title": "YOLO",
+  "commands": [
+    {
+      "key": "1",
+      "label": "Live webcam detection",
+      "description": "Opens your webcam and detects objects in real time.",
+      "module": "modes.webcam",
+      "function": "run_webcam"
+    },
+    {
+      "key": "2",
+      "label": "Detect objects in an image",
+      "description": "Detects elements in an image and saves the annotated result.",
+      "module": "modes.image",
+      "function": "run_image"
+    }
+  ]
+}
