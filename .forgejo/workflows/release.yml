@@ -1,0 +1,105 @@
+name: Release on version bump
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - pyproject.toml
+
+jobs:
+  check-and-release:
+    runs-on: codeberg-tiny
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "Detected version: $VERSION"
+
+      - name: Check if tag already exists
+        id: tag_check
+        run: |
+          if git tag | grep -q "^${{ steps.version.outputs.tag }}$"; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag ${{ steps.version.outputs.tag }} already exists, skipping."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "New version detected: ${{ steps.version.outputs.tag }}"
+          fi
+
+      - name: Generate release notes
+        if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          LAST_TAG=$(git tag --sort=-version:refname | head -1)
+
+          if [ -z "$LAST_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s" HEAD \
+              --invert-grep --grep='^bump:')
+          else
+            COMMITS=$(git log --pretty=format:"- %s" "$LAST_TAG"..HEAD \
+              --invert-grep --grep='^bump:')
+          fi
+
+          if [ -z "$COMMITS" ]; then
+            COMMITS="- No user-facing changes"
+          fi
+
+          cat > /tmp/release_notes.md << NOTES
+          ## What's changed
+
+          $COMMITS
+          NOTES
+
+          echo "--- release notes ---"
+          cat /tmp/release_notes.md
+
+      - name: Create tag and release
+        if: steps.tag_check.outputs.exists == 'false'
+        run: |
+          API="${{ github.server_url }}/api/v1"
+          REPO="${{ github.repository }}"
+          TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          TAG="${{ steps.version.outputs.tag }}"
+
+          echo "Creating tag $TAG..."
+
+          curl -s -o /tmp/tag_response.json -w "Tag HTTP: %{http_code}\n" \
+            -X POST "$API/repos/$REPO/tags" \
+            -H "Authorization: token $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\": \"$TAG\", \"message\": \"Release $TAG\"}"
+
+          cat /tmp/tag_response.json
+
+          RELEASE_BODY=$(python3 -c "import json; print(json.dumps(open('/tmp/release_notes.md').read()))")
+
+          curl -s -o /tmp/release_response.json -w "Release HTTP: %{http_code}\n" \
+            -X POST "$API/repos/$REPO/releases" \
+            -H "Authorization: token $TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\": \"$TAG\", \"name\": \"$TAG\", \"body\": $RELEASE_BODY, \"draft\": false, \"prerelease\": false}"
+
+          cat /tmp/release_response.json
+
+          python3 -c "
+          import json, sys
+          data = json.load(open('/tmp/release_response.json'))
+          if 'id' not in data:
+              print('ERROR:', data, file=sys.stderr)
+              sys.exit(1)
+          print('Release id:', data['id'])
+          "
+
+          echo "✓ Release $TAG published."
